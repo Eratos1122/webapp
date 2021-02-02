@@ -197,7 +197,6 @@ import {
   authenticated$,
   networkVersion$,
   tokenMeta$,
-  catchOptimisticNetwork,
   poolPrograms$,
   fetchPositionsTrigger$
 } from "@/api/observables";
@@ -5750,7 +5749,6 @@ export class EthBancorModule
           converterRegistryAddress
         })
       ),
-      catchOptimisticNetwork(),
       shareReplay(1)
     );
 
