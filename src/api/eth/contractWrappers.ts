@@ -325,10 +325,6 @@ export const fetchWhiteListedV1Pools = async (
 
     return whitelistedPools;
   } catch (e) {
-    console.error(
-      "Failed fetching whitelisted pools with address",
-      liquidityProtectionSettingsAddress
-    );
     throw new Error(
       `Failed fetching whitelisted pools with address ${liquidityProtectionSettingsAddress}`
     );
