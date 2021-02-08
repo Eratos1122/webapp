@@ -5950,6 +5950,7 @@ export class EthBancorModule
         )
         .subscribe(liqMiningApr => this.updateLiqMiningApr(liqMiningApr));
 
+      tokenMeta$.subscribe(meta => this.setTokenMeta(meta));
       await combineLatest([apiData$, tokenMeta$])
         .pipe(
           switchMap(([apiData, tokenMeta]) => {
