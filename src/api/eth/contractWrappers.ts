@@ -4,9 +4,9 @@ import {
   buildV2Converter,
   buildRegistryContract,
   buildLiquidityProtectionContract,
-  buildLiquidityProtectionSettingsContract,
   buildAddressLookupContract,
-  buildLiquidityProtectionStoreContract
+  buildLiquidityProtectionStoreContract,
+  buildLiquidityProtectionSettingsContract
 } from "./contractTypes";
 import { zeroAddress } from "../helpers";
 import { fromPairs, toPairs } from "lodash";
@@ -395,4 +395,17 @@ export const fetchPositionsMulti = async (
     ) as ProtectedLiquidity[];
 
   return protectedLiquidity;
+};
+
+export const addLiquidityDisabled = async (
+  settingsContract: string,
+  poolId: string,
+  reserveId: string
+): Promise<boolean> => {
+  const contract = buildLiquidityProtectionSettingsContract(settingsContract);
+  const res = await contract.methods
+    .addLiquidityDisabled(poolId, reserveId)
+    .call();
+
+  return res;
 };

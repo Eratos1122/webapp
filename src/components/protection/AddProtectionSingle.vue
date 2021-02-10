@@ -1,16 +1,13 @@
 <template>
   <div class="mt-3">
-    <alert-block
-      title="Learn what it means to add liquidity to a pool:"
-      class="my-3"
-    >
+    <alert-block :title="`${$t('add_liquidity_pool')}:`" class="my-3">
       <ol class="m-0 pl-3">
         <li>
           <a
             href="https://blog.bancor.network/how-to-stake-liquidity-earn-fees-on-bancor-bff8369274a1"
             target="_blank"
           >
-            How do I make money by providing liquidity?
+            {{ `${$t("make_money_liquidity")}?` }}
           </a>
         </li>
         <li>
@@ -18,7 +15,7 @@
             href="https://blog.bancor.network/beginners-guide-to-getting-rekt-by-impermanent-loss-7c9510cb2f22"
             target="_blank"
           >
-            What is impermanent loss?
+            {{ `${$t("impermanent_loss")}?` }}
           </a>
         </li>
         <li>
@@ -26,13 +23,13 @@
             href="https://bankless.substack.com/p/how-to-protect-yourself-from-impermanent"
             target="_blank"
           >
-            How does Bancor protect me from impermanent loss?
+            {{ `${$t("protect_impermanent_loss")}?` }}
           </a>
         </li>
       </ol>
     </alert-block>
 
-    <label-content-split label="Stake in Pool" class="my-3">
+    <label-content-split :label="$t('stake_pool')" class="my-3">
       <pool-logos
         :pool="pool"
         :dropdown="true"
@@ -47,9 +44,10 @@
     </label-content-split>
 
     <token-input-field
-      label="Stake Amount"
+      :label="$t('stake_amount')"
       :token="token"
       v-model="amount"
+      :disabled="focusedReserveIsDisabled"
       @input="amountChanged"
       :balance="balance"
       :error-msg="inputError"
@@ -64,31 +62,58 @@
       class="mt-3 mb-3"
     />
 
-    <alert-block
-      v-if="priceDeviationTooHigh && !inputError && amount"
-      variant="error"
-      msg="Due to price volatility, protecting your tokens is currently not available. Please try again in a few seconds."
-    />
-
     <gray-border-block v-else-if="outputs.length" :gray-bg="true" class="my-3">
       <div>
         {{ outputs }}
         <label-content-split
           v-for="(output, index) in outputs"
           :key="output.id"
-          :label="index == 0 ? `Value you receive` : ``"
-          :value="`${formatNumber(output.amount)} ${output.symbol}`"
+          :label="index == 0 ? $t('value_receive') : ''"
+          :value="`${prettifyNumber(output.amount)} ${output.symbol}`"
         />
       </div>
     </gray-border-block>
 
+    <alert-block
+      v-if="focusedReserveIsDisabled"
+      variant="error"
+      :msg="$t(`available_reserve_only`, { availableReserveSymbol })"
+      class="mt-3 mb-3"
+    />
+
     <gray-border-block :gray-bg="true" class="my-3">
-      <label-content-split label="Space Available" :loading="loadingMaxStakes">
-        <span @click="setAmount" class="cursor">{{
+      <label-content-split
+        :label="$t('space_available')"
+        :loading="loading"
+        :tooltip="`${$t('for_more_information')} `"
+        :href-text="$t('click_here')"
+        href="https://docs.bancor.network/faqs#why-is-there-no-space-available-for-my-tokens-in-certain-pools"
+      >
+        <span @click="setAmount(maxStakeAmount)" class="cursor">{{
           `${prettifyNumber(maxStakeAmount)} ${maxStakeSymbol}`
         }}</span>
       </label-content-split>
+      <label-content-split
+        v-if="amountToMakeSpace"
+        class="mt-2"
+        :label="
+          $t('needed_open_space', { bnt: bnt.symbol, tkn: otherTkn.symbol })
+        "
+        :loading="loading"
+      >
+        <span @click="setAmount(amountToMakeSpace, 0)" class="cursor">{{
+          `${prettifyNumber(amountToMakeSpace)} ${bnt.symbol}`
+        }}</span>
+      </label-content-split>
     </gray-border-block>
+
+    <price-deviation-error
+      v-model="priceDeviationTooHigh"
+      :pool-id="pool.id"
+      :token-contract="token.contract"
+      class="mb-3"
+      ref="priceDeviationError"
+    />
 
     <main-button
       :label="actionButtonLabel"
@@ -99,7 +124,7 @@
     />
 
     <modal-base
-      title="You are staking and protecting:"
+      :title="`${$t('staking_protecting')}:`"
       v-model="modal"
       @input="setDefault"
     >
@@ -109,7 +134,7 @@
             class="font-size-24 font-w600"
             :class="darkMode ? 'text-dark' : 'text-light'"
           >
-            {{ `${formatNumber(amount)} ${token.symbol}` }}
+            {{ `${prettifyNumber(amount)} ${token.symbol}` }}
           </span>
         </b-col>
       </b-row>
@@ -136,12 +161,18 @@
 <script lang="ts">
 import { Component, Watch } from "vue-property-decorator";
 import { vxm } from "@/store/";
+import { i18n } from "@/i18n";
 import { Step, TxResponse, ViewRelay, ViewAmountDetail } from "@/types/bancor";
 import TokenInputField from "@/components/common/TokenInputField.vue";
 import BigNumber from "bignumber.js";
 import GrayBorderBlock from "@/components/common/GrayBorderBlock.vue";
 import LabelContentSplit from "@/components/common/LabelContentSplit.vue";
-import { formatUnixTime, formatNumber } from "@/api/helpers";
+import {
+  formatUnixTime,
+  formatNumber,
+  compareString,
+  findOrThrow
+} from "@/api/helpers";
 import MainButton from "@/components/common/Button.vue";
 import AlertBlock from "@/components/common/AlertBlock.vue";
 import ModalBase from "@/components/modals/ModalBase.vue";
@@ -150,9 +181,12 @@ import PoolLogos from "@/components/common/PoolLogos.vue";
 import ActionModalStatus from "@/components/common/ActionModalStatus.vue";
 import ModalPoolSelect from "@/components/modals/ModalSelects/ModalPoolSelect.vue";
 import BaseComponent from "@/components/BaseComponent.vue";
+import Vue from "vue";
+import PriceDeviationError from "@/components/common/PriceDeviationError.vue";
 
 @Component({
   components: {
+    PriceDeviationError,
     ModalPoolSelect,
     ActionModalStatus,
     PoolLogos,
@@ -172,9 +206,10 @@ export default class AddProtectionSingle extends BaseComponent {
 
   maxStakeAmount: string = "";
   maxStakeSymbol: string = "";
+  amountToMakeSpace: string = "";
   priceDeviationTooHigh: boolean = false;
 
-  loadingMaxStakes = false;
+  loading: boolean = false;
 
   amount: string = "";
 
@@ -195,7 +230,7 @@ export default class AddProtectionSingle extends BaseComponent {
 
   @Watch("token")
   async onTokenChange() {
-    await this.loadMaxStakes();
+    await this.load();
     await this.loadRecentAverageRate();
   }
 
@@ -211,14 +246,39 @@ export default class AddProtectionSingle extends BaseComponent {
     return this.pool.reserves[this.selectedTokenIndex];
   }
 
+  get bnt() {
+    return this.pool.reserves[0];
+  }
+
+  get otherTkn() {
+    return this.pool.reserves[1];
+  }
+
   get opposingToken() {
     return this.pool.reserves.find(
       (reserve, index) => index !== this.selectedTokenIndex
     );
   }
 
+  disabledReserves: string[] = [];
+
   get tokens() {
     return this.pool.reserves;
+  }
+
+  get focusedReserveIsDisabled() {
+    return this.disabledReserves.some(reserveId =>
+      compareString(reserveId, this.token.id)
+    );
+  }
+
+  get availableReserveSymbol() {
+    return this.pool.reserves.find(
+      reserve =>
+        !this.disabledReserves.some(reserveId =>
+          compareString(reserveId, reserve.id)
+        )
+    )!.symbol;
   }
 
   get pools() {
@@ -241,33 +301,33 @@ export default class AddProtectionSingle extends BaseComponent {
   }
 
   get actionButtonLabel() {
-    if (!this.amount) return "Enter an Amount";
-    else if (this.priceDeviationTooHigh) return "Price Deviation too High";
-    else return "Stake and Protect";
+    if (!this.amount) return i18n.t("enter_amount");
+    else if (this.priceDeviationTooHigh) return i18n.t("price_deviation_high");
+    else return i18n.t("stake_protect");
   }
 
   get disableActionButton() {
+    if (this.focusedReserveIsDisabled) return true;
     if (!this.amount) return true;
     else if (this.priceDeviationTooHigh) return true;
-    else if (this.loadingMaxStakes) return true;
+    else if (this.loading) return true;
     else return this.inputError ? true : false;
   }
 
   get inputError() {
     if (this.amount == "") return "";
     if (this.preTxError) return this.preTxError;
-    if (parseFloat(this.amount) === 0) return "Amount can not be Zero";
+    if (parseFloat(this.amount) === 0) return i18n.t("amount_not_zero");
 
     const amountNumber = new BigNumber(this.amount);
     const balanceNumber = new BigNumber(this.balance || 0);
 
-    if (amountNumber.gt(balanceNumber)) return "Insufficient balance";
+    if (amountNumber.gt(balanceNumber)) return i18n.t("insufficient_balance");
     else return "";
   }
 
   get whitelistWarning() {
-    const msg =
-      "Pool you have selected is not approved for protection. Your stake will provide you with gBNT voting power which can be used to propose including it. If is approved, your original stake time will be used for vesting.";
+    const msg = i18n.t("pool_not_approved");
     const show = true;
 
     return { show, msg };
@@ -275,12 +335,12 @@ export default class AddProtectionSingle extends BaseComponent {
 
   get modalConfirmButton() {
     return this.error
-      ? "Close"
+      ? i18n.t("close")
       : this.success
-      ? "Close"
+      ? i18n.t("close")
       : this.txBusy
-      ? "processing ..."
-      : "Confirm";
+      ? `${i18n.t("processing")}...`
+      : i18n.t("confirm");
   }
 
   async initAction() {
@@ -336,7 +396,9 @@ export default class AddProtectionSingle extends BaseComponent {
 
       if (res.error) {
         this.preTxError =
-          res.error == "Insufficient store balance" ? errorMsg : res.error;
+          res.error == "balance"
+            ? i18n.tc("insufficient_store_balance")
+            : errorMsg;
       } else {
         this.preTxError = "";
       }
@@ -361,10 +423,6 @@ export default class AddProtectionSingle extends BaseComponent {
     this.success = null;
   }
 
-  formatNumber(amount: string) {
-    return formatNumber(amount, 6);
-  }
-
   get currentStatus() {
     if (this.sections.length) {
       return this.sections[this.stepIndex].description;
@@ -378,12 +436,9 @@ export default class AddProtectionSingle extends BaseComponent {
   }
 
   async loadRecentAverageRate() {
-    this.priceDeviationTooHigh = await vxm.bancor.checkPriceDeviationTooHigh({
-      relayId: this.pool.id,
-      selectedTokenAddress: this.token.contract
-    });
-
-    console.log("priceDeviationTooHigh", this.priceDeviationTooHigh);
+    await (this.$refs.priceDeviationError as Vue & {
+      loadRecentAverageRate: () => boolean;
+    }).loadRecentAverageRate();
   }
 
   async selectPool(id: string) {
@@ -393,35 +448,56 @@ export default class AddProtectionSingle extends BaseComponent {
     });
   }
 
-  async loadMaxStakes() {
-    if (this.loadingMaxStakes) return;
-    this.loadingMaxStakes = true;
+  async fetchAndSetMaxStakes(poolId: string) {
+    this.amountToMakeSpace = "";
+
+    const res = await vxm.ethBancor.getAvailableAndAmountToGetSpace({
+      poolId
+    });
+    const availableSpace = res.availableSpace;
+
+    const selectedToken = findOrThrow(
+      availableSpace,
+      space => compareString(space.token, this.token.symbol),
+      "Failed finding focused token in available space"
+    );
+    this.maxStakeAmount = selectedToken.amount;
+    this.maxStakeSymbol = selectedToken.token;
+
+    if (res.amountToGetSpace) this.amountToMakeSpace = res.amountToGetSpace;
+  }
+
+  async fetchAndSetDisabledReserves(poolId: string) {
+    const disabledReserves = await vxm.ethBancor.fetchDisabledReserves(poolId);
+    this.disabledReserves = disabledReserves;
+  }
+
+  async load() {
+    if (this.loading) return;
+    this.loading = true;
     try {
-      const result = await vxm.ethBancor.getMaxStakesView({
-        poolId: this.pool.id
-      });
-      let stake = result.filter(x => x.token === this.token.symbol);
-      if (stake.length === 1) {
-        this.maxStakeAmount = stake[0].amount;
-        this.maxStakeSymbol = stake[0].token;
-      }
+      await Promise.all([
+        this.fetchAndSetMaxStakes(this.pool.id),
+        this.fetchAndSetDisabledReserves(this.pool.id)
+      ]);
     } catch (e) {
-      console.log(e);
+      console.error(e.message);
     } finally {
-      this.loadingMaxStakes = false;
+      this.loading = false;
     }
   }
 
-  setAmount() {
-    this.amount =
-      parseFloat(this.maxStakeAmount) > 0 ? this.maxStakeAmount : "0";
+  setAmount(amount: string, switchToken: number = -1) {
+    if (switchToken != -1 && this.selectedTokenIndex != switchToken)
+      this.selectedTokenIndex = switchToken;
+    this.amount = parseFloat(amount) > 0 ? amount : "0";
   }
 
   async mounted() {
-    await this.loadMaxStakes();
+    await this.load();
     await this.loadRecentAverageRate();
     this.interval = setInterval(async () => {
-      await this.loadMaxStakes();
+      await this.load();
       await this.loadRecentAverageRate();
     }, 30000);
   }

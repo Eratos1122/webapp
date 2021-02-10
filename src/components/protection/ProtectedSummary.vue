@@ -6,10 +6,10 @@
     >
       <template #header>
         <div class="d-flex justify-content-between align-items-center w-100">
-          <div class="font-size-16 font-w500">My Stake</div>
+          <div class="font-size-16 font-w500">{{ $t("my_stake") }}</div>
           <b-btn @click="openModal" size="sm" variant="primary" class="rounded">
             <font-awesome-icon icon="plus" class="d-lg-none" />
-            <span class="d-none d-lg-inline">Stake</span>
+            <span class="d-none d-lg-inline">{{ $t("stake") }} </span>
           </b-btn>
         </div>
       </template>
@@ -20,10 +20,7 @@
             :key="item.key"
             class="text-center"
           >
-            <div
-              class="font-size-14 font-w600"
-              :class="item.key === 'ROI' ? 'text-success' : 'text-primary'"
-            >
+            <div class="font-size-14 font-w600 text-primary">
               {{ item.value }}
             </div>
             <div class="text-uppercase font-size-10 font-w500">
@@ -45,6 +42,7 @@ import BaseComponent from "@/components/BaseComponent.vue";
 import ModalPoolSelect from "@/components/modals/ModalSelects/ModalPoolSelect.vue";
 import { stringifyPercentage } from "@/api/helpers";
 import { vxm } from "@/store";
+import { i18n } from "@/i18n";
 import ContentBlock from "@/components/common/ContentBlock.vue";
 
 @Component({ components: { ContentBlock, ModalPoolSelect } })
@@ -69,14 +67,14 @@ export default class ProtectedSummary extends BaseComponent {
     if (!this.hasPositions) {
       return [
         {
-          key: "Protected Value",
+          key: i18n.t("protected_value"),
           value: "--"
         },
         {
-          key: "Claimable Value",
+          key: i18n.t("claimable_value"),
           value: "--"
         },
-        { key: "ROI", value: "--" }
+        { key: i18n.t("total_fees"), value: "--" }
       ];
     } else {
       const initialStake = this.positions
@@ -91,21 +89,24 @@ export default class ProtectedSummary extends BaseComponent {
         .map(x => Number(x.protectedAmount.usdValue || 0))
         .reduce((sum, current) => sum + current);
 
+      const fees = protectedValue - initialStake;
       const totalRewards = this.rewardsBalance.pendingRewards.usd.toNumber();
       protectedValue += totalRewards;
       claimableValue += totalRewards;
 
-      const roi = (protectedValue - initialStake) / initialStake;
       return [
         {
-          key: "Protected Value",
+          key: i18n.t("protected_value"),
           value: "~" + this.prettifyNumber(protectedValue, true)
         },
         {
-          key: "Claimable Value",
+          key: i18n.t("claimable_value"),
           value: "~" + this.prettifyNumber(claimableValue, true)
         },
-        { key: "ROI", value: this.stringifyPercentage(roi) }
+        {
+          key: i18n.t("total_fees"),
+          value: "~" + this.prettifyNumber(fees, true)
+        }
       ];
     }
   }

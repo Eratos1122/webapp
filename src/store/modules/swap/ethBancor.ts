@@ -87,7 +87,8 @@ import {
   conversionPath,
   getTokenSupplyWei,
   existingPool,
-  getRemoveLiquidityReturn
+  getRemoveLiquidityReturn,
+  addLiquidityDisabled
 } from "@/api/eth/contractWrappers";
 import { toWei, fromWei, toHex, asciiToHex } from "web3-utils";
 import Decimal from "decimal.js";
@@ -183,7 +184,8 @@ import {
   filterAndWarn,
   staticToConverterAndAnchor,
   miningBntReward,
-  miningTknReward
+  miningTknReward,
+  calculateAmountToGetSpace
 } from "@/api/pureHelpers";
 import {
   distinctArrayItem,
@@ -1396,9 +1398,9 @@ export class EthBancorModule
 
   liquidityProtectionSettings: LiquidityProtectionSettings = {
     contract: "",
-    minDelay: dayjs.duration("30", "days").asSeconds(),
-    maxDelay: dayjs.duration("100", "days").asSeconds(),
-    lockedDelay: dayjs.duration("24", "hours").asSeconds(),
+    minDelay: dayjs.duration(30, "days").asSeconds(),
+    maxDelay: dayjs.duration(100, "days").asSeconds(),
+    lockedDelay: dayjs.duration(24, "hours").asSeconds(),
     networkToken: "",
     govToken: "",
     defaultNetworkTokenMintingLimit: "0"
@@ -1468,6 +1470,7 @@ export class EthBancorModule
   }
 
   whiteListedPools: string[] = [];
+  whiteListedPoolsLoading = true;
 
   @mutation setWhiteListedPools(anchors: string[]) {
     this.whiteListedPools = anchors;
@@ -2066,7 +2069,7 @@ export class EthBancorModule
     return lockedBalances;
   }
 
-  loadingProtectedPositions = false;
+  loadingProtectedPositions = true;
 
   get protectedPositions(): ViewProtectedLiquidity[] {
     const owner = this.currentUser;
@@ -2344,6 +2347,12 @@ export class EthBancorModule
     const averageRate = new BigNumber(recentAverageRateResult["1"]).dividedBy(
       recentAverageRateResult["0"]
     );
+
+    if (averageRate.isNaN()) {
+      throw new Error(
+        "Price deviation calculation failed. Please contact support."
+      );
+    }
 
     const priceDeviationTooHigh = calculatePriceDeviationTooHigh(
       averageRate,
@@ -3037,18 +3046,19 @@ export class EthBancorModule
       const whitelisted = whiteListedPools.some(whitelistedAnchor =>
         compareString(whitelistedAnchor, relay.pool_dlt_id)
       );
-
+      const bntReserve = relay.reserves.find(reserve =>
+        compareString(reserve.address, liquidityProtectionNetworkToken)
+      );
       const liquidityProtection =
         relay.reserveTokens.some(reserve =>
           compareString(reserve.contract, liquidityProtectionNetworkToken)
         ) &&
         relay.reserveTokens.length == 2 &&
         relay.reserveTokens.every(reserve => reserve.reserveWeight == 0.5) &&
-        whitelisted;
+        whitelisted &&
+        limit &&
+        limit.isLessThan(bntReserve!.balance);
 
-      const bntReserve = relay.reserves.find(reserve =>
-        compareString(reserve.address, liquidityProtectionNetworkToken)
-      );
       const addProtectionSupported = liquidityProtection && bntReserve;
 
       const apr = aprs.find(apr =>
@@ -3507,6 +3517,111 @@ export class EthBancorModule
     ];
   }
 
+  @action async fetchDisabledReserves(poolId: string): Promise<string[]> {
+    const pool = findOrThrow(
+      this.newPools,
+      pool => compareString(pool.pool_dlt_id, poolId),
+      `failed to find pool with id of ${poolId}`
+    );
+    const reserveIds = pool.reserves.map(reserve => reserve.address);
+    const settingsContract = this.liquidityProtectionSettings.contract;
+
+    const reserveStatuses = await Promise.all(
+      reserveIds.map(async reserveId => ({
+        reserveId,
+        disabled: await addLiquidityDisabled(
+          settingsContract,
+          pool.pool_dlt_id,
+          reserveId
+        )
+      }))
+    );
+    const disabledReserves = reserveStatuses
+      .filter(reserve => reserve.disabled)
+      .map(reserve => reserve.reserveId);
+
+    return disabledReserves;
+  }
+
+  @action async getAvailableAndAmountToGetSpace({
+    poolId
+  }: {
+    poolId: string;
+  }): Promise<{
+    availableSpace: {
+      amount: string;
+      token: string;
+    }[];
+    amountToGetSpace?: string;
+  }> {
+    const { maxStakes } = await this.getMaxStakes({
+      poolId
+    });
+    const pool = this.relay(poolId);
+    const bntTknArr = pool.reserves.map(r => {
+      return {
+        contract: r.contract,
+        symbol: r.symbol,
+        decimals: this.token(r.id).precision
+      };
+    });
+
+    const [bnt, tkn] = sortAlongSide(bntTknArr, item => item.contract, [
+      this.liquidityProtectionSettings.networkToken
+    ]);
+
+    const availableSpace = [
+      {
+        amount: shrinkToken(maxStakes.maxAllowedBntWei, bnt.decimals),
+        token: bnt.symbol
+      },
+      {
+        amount: shrinkToken(maxStakes.maxAllowedTknWei, tkn.decimals),
+        token: tkn.symbol
+      }
+    ];
+    const tknSpaceAvailableLTOne = new BigNumber(availableSpace[1].amount).lt(
+      1
+    );
+    if (tknSpaceAvailableLTOne) {
+      const liquidityProtectionSettings = buildLiquidityProtectionSettingsContract(
+        this.liquidityProtectionSettings.contract,
+        w3
+      );
+      const [balances, limit] = await Promise.all([
+        this.fetchRelayBalances({ poolId }),
+        liquidityProtectionSettings.methods
+          .networkTokenMintingLimits(poolId)
+          .call()
+      ]);
+      const [bntReserve, tknReserve] = sortAlongSide(
+        balances.reserves,
+        reserve => reserve.symbol,
+        ["BNT"]
+      );
+
+      const bntAmount = shrinkToken(bntReserve.weiAmount, bntReserve.decimals);
+      const tknAmount = shrinkToken(tknReserve.weiAmount, tknReserve.decimals);
+      const spaceAvailAble = shrinkToken(
+        maxStakes.maxAllowedBntWei,
+        bntReserve.decimals
+      );
+      const limitShrinked = shrinkToken(limit, bntReserve.decimals);
+
+      const amountToGetSpace = calculateAmountToGetSpace(
+        bntAmount,
+        tknAmount,
+        spaceAvailAble,
+        limitShrinked
+      );
+      return {
+        availableSpace,
+        amountToGetSpace: amountToGetSpace
+      };
+    }
+    return { availableSpace };
+  }
+
   @action async calculateProtectionSingle({
     poolId,
     reserveAmount
@@ -3536,7 +3651,7 @@ export class EthBancorModule
 
     return {
       outputs: [],
-      ...(overMaxLimit && { error: "Insufficient store balance" })
+      ...(overMaxLimit && { error: "balance" })
     };
   }
 
