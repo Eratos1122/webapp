@@ -1560,7 +1560,7 @@ export class EthBancorModule
     liquidityProtection: string;
     blockNumberNow: number;
     supportedAnchors: string[];
-  }) {
+  }): Promise<ProtectedLiquidityCalculated[]> {
     try {
       const currentBlockNumber = blockNumberNow;
 
@@ -1803,8 +1803,8 @@ export class EthBancorModule
             ...(liqReturn && omit(liqReturn, ["positionId"])),
             ...(roiReturn && omit(roiReturn, ["positionId"])),
             pendingReserveReward: pendingReserveReward
-              ? pendingReserveReward.pendingReserveReward
-              : new BigNumber(0)
+              ? pendingReserveReward.pendingReserveReward.toString()
+              : "0"
           };
         }
       );
